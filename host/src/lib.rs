@@ -27,11 +27,20 @@
 //! and rejects any witness that does not match the public parameters.
 
 pub mod bundle;
+pub mod disclosure_request;
 pub mod l1_source;
 pub mod prover;
+pub mod rpc_l1;
+pub mod rpc_l2;
+pub mod rpc_wire;
 pub mod verifier;
+pub mod witness_source;
 
 pub use bundle::{BundleError, ProofBundle, BUNDLE_FORMAT_VERSION};
+pub use disclosure_request::DisclosureRequest;
 pub use l1_source::{L1Source, MockL1Source};
-pub use prover::{prove, ProveError, ProveRequest};
+pub use prover::{prove, prove_from_source, ProveError, ProveFromSourceError, ProveRequest};
+pub use rpc_l1::{RpcL1Source, RpcL1SourceError};
+pub use rpc_l2::{RpcWitnessSource, RpcWitnessSourceError};
 pub use verifier::{verify_bundle, VerifiedDisclosure, VerifyError};
+pub use witness_source::WitnessSource;

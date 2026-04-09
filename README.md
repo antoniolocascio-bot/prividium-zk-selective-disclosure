@@ -1,11 +1,11 @@
 # prividium-zk-selective-disclosure
 
-Rust tooling for selective disclosure over data in Prividiums (private zkSync
+Rust tooling for selective disclosure over data in Prividiums (private ZKsync
 rollups). A guest program runs on top of the [Airbender
 platform](https://github.com/matter-labs/airbender-platform) and proves a
-statement selected from a group of possibilities; small host-side tools
-(future) fetch the needed data from Prividium RPC endpoints, drive proof
-generation, and verify proofs.
+statement selected from a group of possibilities; host-side tools fetch
+the needed data from Prividium RPC endpoints, drive proof generation,
+and verify proofs.
 
 See `DESIGN.md` for the full design and `PLAN.md` for the implementation
 plan.
@@ -21,18 +21,38 @@ airbender **dev** backend:
 
 The host crate (`prividium-sd-host`) exposes library-level `prove` and
 `verify_bundle` entry points that wrap the airbender prover/verifier in a
-serializable [`ProofBundle`] format, plus a pluggable [`L1Source`] trait
-(with an in-memory `MockL1Source`) so tests run without any network.
+serializable [`ProofBundle`] format. Three pluggable fetch seams keep
+everything testable without a network:
+
+- `L1Source` trait for `storedBatchHash(batchNumber)` lookups, with a
+  real alloy-backed `RpcL1Source` and an in-memory `MockL1Source`.
+- `WitnessSource` trait for building witnesses, with a real
+  alloy-backed `RpcWitnessSource` (talks to `zks_getProof`,
+  `zks_getAccountPreimage`, and `eth_getBlockByNumber` on the L2)
+  and an in-memory `MockWitnessSource`.
+- A CLI binary (`prividium-sd-host prove | verify | inspect`) that
+  wires both real sources together for end-to-end usage against a
+  live local or remote Prividium.
+
+A `local-setup/` directory contains a `run_local.sh` that launches an
+anvil L1 + a patched `zksync-os-server` L2 for offline testing. See
+[`local-setup/README.md`](local-setup/README.md).
 
 Every layer is exercised end-to-end through real fixtures built on top of
 the ZKsync OS `TestingTree` and the real bootloader `BlockHeader::hash`,
 so every proof the integration tests accept is byte-identical to what the
 production server would emit for the same inputs.
 
-**Not yet implemented:** real RPC clients for `zks_getProof` /
-`eth_getBlockByNumber` / `storedBatchHash(batchNumber)`, a CLI that uses
-them, and the real (GPU / CPU) airbender backends. The bundle format is
-already designed to be additive for the real-backend transition.
+**Upstream PR required:** `zks_getAccountPreimage`, the RPC method that
+returns the 124-byte `AccountProperties::encoding()` blob used by
+`balance_of` and `observable_bytecode_hash`, lives in
+[matter-labs/zksync-os-server#1161](https://github.com/matter-labs/zksync-os-server/pull/1161)
+and must be checked out as a branch until it merges. See
+`local-setup/README.md` for the exact git steps. `tx_inclusion` works
+against stock upstream `main`.
+
+**Not yet implemented:** real (GPU / CPU) airbender backends. The
+bundle format is already designed to be additive for that transition.
 
 ## Layout
 
@@ -69,17 +89,26 @@ prividium-zk-selective-disclosure/
 │       └── scenarios.rs    # native verifier round-trip + tamper tests
 ├── guest/              # airbender riscv32 guest binary (dispatches on StatementId)
 │   └── src/main.rs
-└── host/               # prover + verifier library (+ minimal CLI)
-    ├── src/
-    │   ├── lib.rs          # public API surface
-    │   ├── bundle.rs       # ProofBundle wire format (postcard)
-    │   ├── prover.rs       # `prove(...)` driving the airbender dev prover
-    │   ├── verifier.rs     # `verify_bundle(...)` + VerifiedDisclosure
-    │   ├── l1_source.rs    # L1Source trait + MockL1Source impl
-    │   └── main.rs         # placeholder CLI (defers to library)
-    └── tests/
-        ├── statements.rs   # raw guest via airbender transpiler_runner
-        └── end_to_end.rs   # prover → bundle encode/decode → verifier
+├── host/               # prover + verifier library + CLI
+│   ├── src/
+│   │   ├── lib.rs               # public API surface
+│   │   ├── main.rs              # CLI: prove / verify / inspect
+│   │   ├── bundle.rs            # ProofBundle wire format (postcard)
+│   │   ├── prover.rs            # prove(), prove_from_source()
+│   │   ├── verifier.rs          # verify_bundle() + VerifiedDisclosure
+│   │   ├── disclosure_request.rs # high-level request enum
+│   │   ├── l1_source.rs         # L1Source trait + MockL1Source
+│   │   ├── witness_source.rs    # WitnessSource trait + MockWitnessSource
+│   │   ├── rpc_wire.rs          # zks_getProof JSON wire types (mirrored)
+│   │   ├── rpc_l1.rs            # RpcL1Source: alloy + storedBatchHash
+│   │   └── rpc_l2.rs            # RpcWitnessSource: alloy + zks_getProof etc.
+│   └── tests/
+│       ├── statements.rs        # raw guest via airbender transpiler_runner
+│       ├── end_to_end.rs        # prover → bundle → verifier (raw ProveRequest)
+│       └── witness_source.rs    # DisclosureRequest → WitnessSource → prove → verify
+└── local-setup/        # scripts to run anvil + zksync-os-server locally
+    ├── README.md
+    └── run_local.sh
 ```
 
 The workspace at the root contains `core` and `test-fixtures`. `guest`
@@ -133,38 +162,72 @@ airbender and exercise the full prover / verifier path):
 The host tests are `--release` because the airbender transpiler runner is
 several orders of magnitude slower in debug mode.
 
+## Using the CLI
+
+```sh
+# Start the local anvil + zksync-os-server (see local-setup/README.md
+# for the branch prerequisites)
+./local-setup/run_local.sh
+
+# In another terminal, generate a proof that account 0xab..ab had a
+# specific balance at L1 batch 42:
+./host/target/release/prividium-sd-host prove balance-of \
+    --l2-rpc-url http://localhost:3050 \
+    --batch-number 42 \
+    --address 0xababababababababababababababababababab \
+    --out /tmp/proof.bin
+
+# Verify it, checking the L1 commitment against anvil:
+./host/target/release/prividium-sd-host verify \
+    --l1-rpc-url http://localhost:8545 \
+    --diamond-proxy 0x<from server logs> \
+    --in /tmp/proof.bin
+
+# Debug a bundle file without touching any RPC:
+./host/target/release/prividium-sd-host inspect --in /tmp/proof.bin
+```
+
+The three prove subcommands are `balance-of`, `observable-bytecode-hash`,
+and `tx-inclusion`. See `--help` on any of them for the arg list.
+
 ## Using the library
 
-Library-level prover and verifier entry points live in
-`prividium-sd-host`:
+The CLI is a thin shell around the library. For programmatic usage:
 
 ```rust
-use prividium_sd_host::{prove, verify_bundle, MockL1Source, ProveRequest};
+use alloy::primitives::Address;
+use prividium_sd_host::{
+    prove_from_source, verify_bundle, DisclosureRequest, RpcL1Source,
+    RpcWitnessSource, VerifiedDisclosure,
+};
 
-let bundle = prove(
-    "../guest/dist/app",
-    ProveRequest {
-        statement_id: /* StatementId::BalanceOf, etc. */,
-        batch_number,
-        l1_commitment,
-        params_bytes,    // canonical per-statement public parameter bytes
-        witness_bytes,   // canonical per-statement witness bytes
+let l2 = RpcWitnessSource::new("http://localhost:3050")?;
+let bundle = prove_from_source(
+    "guest/dist/app",
+    &l2,
+    DisclosureRequest::BalanceOf {
+        batch_number: 42,
+        address: "0xababababababababababababababababababab".parse()?,
     },
 )?;
 
-let l1 = MockL1Source::new().with_batch(batch_number, l1_commitment);
-let disclosure = verify_bundle("../guest/dist/app", &bundle, &l1)?;
-// disclosure: VerifiedDisclosure::{BalanceOf,ObservableBytecodeHash,TxInclusion}
+// Ship `bundle.encode()?` over the wire here.
+
+let l1 = RpcL1Source::new(
+    "http://localhost:8545",
+    diamond_proxy_address,
+)?;
+let disclosure: VerifiedDisclosure =
+    verify_bundle("guest/dist/app", &bundle, &l1)?;
 ```
 
-To serialize the bundle for transport use `bundle.encode()`; to parse it
-back use `ProofBundle::decode(&bytes)`. Both are versioned
-(`BUNDLE_FORMAT_VERSION`) so breakage is caught loudly rather than
-silently.
+Both source types are traits — swap in `MockL1Source` /
+`MockWitnessSource` for unit tests that don't need the network. See
+`host/tests/witness_source.rs` for worked examples.
 
-Real RPC-backed `L1Source` and `WitnessSource` implementations are not
-yet included; see the open questions in `DESIGN.md` §12 for what's
-needed.
+Bundles serialize via `bundle.encode()` / `ProofBundle::decode(&bytes)`.
+The format is versioned (`BUNDLE_FORMAT_VERSION`) so breaking changes
+fail loudly rather than silently.
 
 ## What the tests cover
 
@@ -175,6 +238,10 @@ needed.
 | `test-fixtures` integration tests (`tests/scenarios.rs`) | 9 | Each statement end-to-end through `core::statements::verify` with a real `TestingTree`-produced proof + a real bootloader-verified block hash, plus tamper-rejection tests for wrong balance, wrong L1 commitment, non-existing with non-zero claim, wrong tx hash, wrong block number. |
 | `host` integration tests (`tests/statements.rs`) | 5 | Each statement run through the compiled airbender guest binary via `Program::load` + `transpiler_runner`, asserting the committed `[u32; 8]` receipt output unpacks to the expected 32-byte public input. Includes a tampered-balance rejection test (which catches the `exit_error()`-induced illegal-instruction panic from the transpiler runner). |
 | `host` end-to-end tests (`tests/end_to_end.rs`) | 8 | Full prover → `ProofBundle` encode/decode → verifier round-trip for all three statements, plus rejection tests for (a) wrong L1 commitment returned by the `MockL1Source`, (b) missing batch in the L1 source, (c) post-hoc `params_bytes` tampering (airbender rejects on receipt mismatch), (d) tampered witness balance (prover rejects via `GuestRejected`). |
-| **Total** | **100** | |
+| `host` witness-source tests (`tests/witness_source.rs`) | 4 | `DisclosureRequest → WitnessSource::fetch → prove_from_source → verify_bundle` round-trip for all three statements through the in-memory `MockWitnessSource`, plus a "not registered" error case. Covers the high-level surface the CLI uses. |
+| `host` library unit tests (`rpc_wire`, `witness_source::mock`) | 6 | JSON wire-format snapshots for `zks_getProof` response types (matches the upstream shape), and basic `MockWitnessSource` map semantics. |
+| **Total** | **104** | |
 
-None of the tests require any network access or any RPC endpoint.
+None of the tests require any network access or any RPC endpoint. The
+`RpcL1Source` / `RpcWitnessSource` / CLI paths are exercised manually
+via `local-setup/run_local.sh` for now.

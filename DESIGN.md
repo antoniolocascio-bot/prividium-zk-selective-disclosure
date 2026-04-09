@@ -4,7 +4,7 @@
 
 ## 1. Goal
 
-Let the operator (or any party with access) of a Prividium (private zkSync
+Let the operator (or any party with access) of a Prividium (private ZKsync
 rollup) produce a succinct zero-knowledge proof that attests to a specific,
 well-defined fact about the chain state *at an L1-committed batch*, without
 revealing any other state.

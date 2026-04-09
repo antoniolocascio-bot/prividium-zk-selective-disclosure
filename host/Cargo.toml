@@ -20,8 +20,37 @@ serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 thiserror = "2"
 
+# RPC client stack. Async end-to-end; the sync `prove` / `verify_bundle`
+# entry points block on a tokio runtime internally so callers don't
+# have to deal with async.
+alloy = { version = "1", default-features = false, features = [
+    "reqwest-rustls-tls",
+    "json-rpc",
+    "rpc-types",
+    "providers",
+    "sol-types",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+anyhow = "1"
+futures = "0.3"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# Note: we deliberately do NOT depend on `zksync_os_rpc_api` /
+# `zksync_os_merkle_tree_api` via path or git. Their transitive dep
+# graph pulls in a different version of `zksync-airbender` than the
+# one `airbender-host` uses, and the two don't compile together on
+# the same nightly. Instead, the `rpc_wire` module in this crate
+# mirrors the on-wire JSON shape of `zks_getProof` /
+# `zks_getAccountPreimage` responses directly.
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+
 [dev-dependencies]
 prividium-sd-test-fixtures = { path = "../test-fixtures" }
+serde_json = "1"
 
 # Mirror airbender-platform's guidance on reducing debug info for packages that
 # otherwise require a larger-than-default compilation stack.

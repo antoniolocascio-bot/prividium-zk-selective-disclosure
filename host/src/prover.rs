@@ -125,6 +125,44 @@ fn run_prover_catching_panic(
     }
 }
 
+/// Errors returned by the high-level [`prove_from_source`] helper.
+/// Wraps [`ProveError`] and adds a variant for witness-source failures
+/// so the caller can tell "no prover available" from "couldn't fetch
+/// the witness in the first place" apart.
+#[derive(Debug, thiserror::Error)]
+pub enum ProveFromSourceError<WE: std::error::Error + 'static> {
+    #[error("witness source failed: {0}")]
+    Witness(#[source] WE),
+    #[error(transparent)]
+    Prove(#[from] ProveError),
+}
+
+/// Fetch a witness from a [`crate::WitnessSource`] and run the
+/// prover on it in one call. Blocks on the source's async `fetch`
+/// via a small current-thread tokio runtime, so sync callers don't
+/// need to think about async.
+pub fn prove_from_source<W>(
+    guest_dist_path: impl AsRef<std::path::Path>,
+    source: &W,
+    request: crate::disclosure_request::DisclosureRequest,
+) -> Result<ProofBundle, ProveFromSourceError<W::Error>>
+where
+    W: crate::witness_source::WitnessSource,
+{
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| {
+            ProveFromSourceError::Prove(ProveError::Airbender(
+                airbender_host::HostError::from(e),
+            ))
+        })?;
+    let prove_request = rt
+        .block_on(source.fetch(request))
+        .map_err(ProveFromSourceError::Witness)?;
+    Ok(prove(guest_dist_path, prove_request)?)
+}
+
 /// Convenience shim that just forwards the `Inputs::push` result into
 /// our error type. Kept as a standalone helper so the error mapping
 /// stays out of the main prove path.
