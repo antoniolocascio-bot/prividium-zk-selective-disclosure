@@ -1,9 +1,9 @@
 //! Flat storage key derivation for the ZKsync OS state tree.
 //!
 //! Mirrors
-//! [`zk_ee::common_structs::derive_flat_storage_key`](../../../../zksync-os/zk_ee/src/common_structs/warm_storage_key.rs)
+//! [`zk_ee::common_structs::derive_flat_storage_key`](https://github.com/matter-labs/zksync-os/blob/dev-20260402/zk_ee/src/common_structs/warm_storage_key.rs)
 //! and
-//! [`basic_system::flat_storage_model::address_into_special_storage_key`](../../../../zksync-os/basic_system/src/system_implementation/flat_storage_model/mod.rs).
+//! [`basic_system::flat_storage_model::address_into_special_storage_key`](https://github.com/matter-labs/zksync-os/blob/dev-20260402/basic_system/src/system_implementation/flat_storage_model/mod.rs).
 //!
 //! Every slot in the tree is keyed by
 //! `flat_key = blake2s(addr_padded_32_be || storage_key_32)`

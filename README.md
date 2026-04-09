@@ -122,9 +122,6 @@ Sibling checkouts (all relative to this repo's parent directory):
 
 - `../airbender-platform` — provides `airbender-sdk` (guest) and
   `airbender-host` (prover/verifier bindings).
-- `../zksync-os` — provides `basic_system::TestingTree` and
-  `basic_bootloader::BlockHeader`. Only `test-fixtures/` depends on
-  this; the guest never links against it.
 - `../zksync-os-server` — only needed for the local setup (see
   `local-setup/README.md`). The local-setup script currently
   requires this to be on the `prividium-sd-account-preimage-rpc`

@@ -9,13 +9,22 @@ description = "Native helpers for building selective-disclosure witnesses in tes
 [dependencies]
 prividium-sd-core = { path = "../core" }
 
-# Reference implementations from the ZKsync OS tree. Used only on the host
-# side, never in the guest. We reach out of the repo to the sibling
-# `../../zksync-os` checkout.
-basic_bootloader = { path = "../../zksync-os/basic_bootloader", default-features = false, features = ["testing"] }
-basic_system = { path = "../../zksync-os/basic_system", default-features = false, features = ["testing"] }
-zk_ee = { path = "../../zksync-os/zk_ee", default-features = false, features = ["testing"] }
-crypto = { path = "../../zksync-os/crypto", default-features = false, features = ["testing"] }
+# Reference implementations from the ZKsync OS tree. Used only on the
+# host side, never in the guest. Pulled from upstream via a git
+# dependency so contributors do not need to maintain a sibling
+# `../zksync-os` checkout just to run our tests.
+#
+# Pinned to the `dev-20260402` upstream tag — that's the version of
+# `basic_system::TestingTree`, `basic_bootloader::BlockHeader`, and
+# `AccountProperties::encoding()` that our test-fixtures wrapper
+# currently targets. Bump this ref carefully: if upstream reshapes
+# `flat_storage_model` or the `BlockHeader` RLP layout, the
+# `MockBlock::new` constructor's `assert_eq!(bs_hash, core_hash)`
+# cross-check will fire and the build will fail loudly.
+basic_bootloader = { git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260402", default-features = false, features = ["testing"] }
+basic_system = { git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260402", default-features = false, features = ["testing"] }
+zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260402", default-features = false, features = ["testing"] }
+crypto = { git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260402", default-features = false, features = ["testing"] }
 ruint = { version = "1.16", default-features = false }
 arrayvec = { version = "0.7", default-features = false }
 

@@ -1091,6 +1091,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 dependencies = [
  "arrayvec",
  "basic_system",
@@ -1111,6 +1112,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 dependencies = [
  "arrayvec",
  "cc-traits",
@@ -1397,6 +1399,7 @@ dependencies = [
 [[package]]
 name = "cc-traits"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 
 [[package]]
 name = "cesu8"
@@ -1676,6 +1679,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -1755,6 +1759,7 @@ dependencies = [
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 
 [[package]]
 name = "darling"
@@ -2086,6 +2091,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -3247,6 +3253,7 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 
 [[package]]
 name = "mul_div"
@@ -4766,6 +4773,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 dependencies = [
  "zk_ee",
 ]
@@ -4872,6 +4880,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 dependencies = [
  "arrayvec",
  "cycle_marker",
@@ -6061,6 +6070,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260402#6bf0d139b7e9b236b25682e6adb8e59b7a7c4516"
 dependencies = [
  "arrayvec",
  "bitflags",
