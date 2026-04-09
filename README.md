@@ -116,79 +116,151 @@ The workspace at the root contains `core` and `test-fixtures`. `guest`
 overrides for heavy proving-related crates) are excluded and each have
 their own `Cargo.lock`.
 
-## Dependencies
+## Prerequisites
 
-Both crates are expected to be checked out as siblings:
+Sibling checkouts (all relative to this repo's parent directory):
 
 - `../airbender-platform` — provides `airbender-sdk` (guest) and
-  `airbender-host` (host driver).
-- `../zksync-os` — provides `basic_system::TestingTree`,
-  `basic_bootloader::BlockHeader`, and friends. Only `test-fixtures/` depends
-  on this tree; the guest never links against it.
+  `airbender-host` (prover/verifier bindings).
+- `../zksync-os` — provides `basic_system::TestingTree` and
+  `basic_bootloader::BlockHeader`. Only `test-fixtures/` depends on
+  this; the guest never links against it.
+- `../zksync-os-server` — only needed for the local setup (see
+  `local-setup/README.md`). The local-setup script currently
+  requires this to be on the `prividium-sd-account-preimage-rpc`
+  branch from [antoniolocascio-bot's fork][fork], until
+  [PR #1161 on upstream][pr-1161] merges; the branch adds the
+  `zks_getAccountPreimage` RPC method that `balance_of` and
+  `observable_bytecode_hash` proofs need.
+
+Tools on `PATH`:
+
+- `cargo-airbender` — one-time install from the sibling
+  airbender-platform checkout (run from this repo root):
+
+  ```sh
+  cargo install --path ../airbender-platform/crates/cargo-airbender \
+      --no-default-features --force
+  ```
+
+- `anvil` — for the local setup only. Install via
+  [foundry](https://getfoundry.sh):
+
+  ```sh
+  curl -L https://foundry.paradigm.xyz | bash
+  foundryup
+  export PATH="$HOME/.foundry/bin:$PATH"
+  ```
+
+[fork]: https://github.com/antoniolocascio-bot/zksync-os-server/tree/prividium-sd-account-preimage-rpc
+[pr-1161]: https://github.com/matter-labs/zksync-os-server/pull/1161
 
 ## Build
 
-Install `cargo-airbender` once:
-
-```sh
-cargo install --path ../airbender-platform/crates/cargo-airbender --no-default-features --force
-```
-
-Build the guest artifacts (produces `guest/dist/app/app.bin`, `.elf`, etc.):
+Build the airbender guest artifacts (produces
+`guest/dist/app/app.bin`, `.elf`, etc.):
 
 ```sh
 (cd guest && cargo airbender build)
 ```
 
-Re-run this every time `guest/` or `core/` changes. The integration tests
-in `host/` load `guest/dist/app/` directly and will fail if the artifacts
-are missing or stale.
+Re-run this every time `guest/` or `core/` changes. The integration
+tests in `host/` load `guest/dist/app/` directly and will fail if the
+artifacts are missing or stale.
 
 ## Test
 
-Workspace unit + native scenario tests (fast, no guest execution):
+Workspace unit + native scenario tests (fast, no guest execution,
+no network):
 
 ```sh
 cargo test
 ```
 
 Host library + integration tests (run the built `app.bin` through
-airbender and exercise the full prover / verifier path):
+airbender and exercise the full prover / verifier path over
+in-memory mocks):
 
 ```sh
 (cd host && cargo test --release)
 ```
 
-The host tests are `--release` because the airbender transpiler runner is
-several orders of magnitude slower in debug mode.
+The host tests are `--release` because the airbender transpiler
+runner is several orders of magnitude slower in debug mode.
 
-## Using the CLI
+None of the above tests need a network or RPC.
+
+## Using the CLI against a local Prividium
+
+See **[`local-setup/README.md`](local-setup/README.md)** for the
+authoritative walkthrough — prerequisites, a one-liner launcher,
+how to grep the diamond-proxy address out of the chain log, and a
+verified end-to-end transcript for all three statements.
+
+Abbreviated version: in terminal 1, launch the local chain:
 
 ```sh
-# Start the local anvil + zksync-os-server (see local-setup/README.md
-# for the branch prerequisites)
-./local-setup/run_local.sh
-
-# In another terminal, generate a proof that account 0xab..ab had a
-# specific balance at L1 batch 42:
-./host/target/release/prividium-sd-host prove balance-of \
-    --l2-rpc-url http://localhost:3050 \
-    --batch-number 42 \
-    --address 0xababababababababababababababababababab \
-    --out /tmp/proof.bin
-
-# Verify it, checking the L1 commitment against anvil:
-./host/target/release/prividium-sd-host verify \
-    --l1-rpc-url http://localhost:8545 \
-    --diamond-proxy 0x<from server logs> \
-    --in /tmp/proof.bin
-
-# Debug a bundle file without touching any RPC:
-./host/target/release/prividium-sd-host inspect --in /tmp/proof.bin
+./local-setup/run_local.sh --logs-dir /tmp/prividium-local-logs
 ```
 
-The three prove subcommands are `balance-of`, `observable-bytecode-hash`,
-and `tx-inclusion`. See `--help` on any of them for the arg list.
+Wait for `"All services started successfully"`. In terminal 2,
+generate and verify a `tx_inclusion` proof for a tx from block 2:
+
+```sh
+TX_HASH=$(curl -s -X POST http://localhost:3050 \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["0x2",false],"id":1}' \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["transactions"][0])')
+
+DIAMOND_PROXY=$(grep -o 'diamond_proxy_l1: ZkChain { instance: IZKChainInstance([^)]*' \
+    /tmp/prividium-local-logs/chain-*.log \
+    | tail -1 | sed 's/.*IZKChainInstance(//')
+
+./host/target/release/prividium-sd-host prove \
+    --l2-rpc-url http://localhost:3050 \
+    --out /tmp/proof.bin \
+    tx-inclusion --batch-number 2 --tx-hash "$TX_HASH"
+
+./host/target/release/prividium-sd-host verify \
+    --l1-rpc-url http://localhost:8545 \
+    --diamond-proxy "$DIAMOND_PROXY" \
+    --in /tmp/proof.bin
+```
+
+Expected output from the final command:
+
+```
+Verified: TxInclusion
+  batch number:  2
+  l1 commitment: 0x...
+  block number:  2
+  tx hash:       0x...
+```
+
+### CLI argument-order gotcha
+
+Clap parses `--l2-rpc-url` and `--out` as options on the `prove`
+**parent** command, not on the statement subcommand. The correct
+structure is:
+
+```text
+prividium-sd-host prove <parent-opts>    <statement>   <statement-opts>
+                        --l2-rpc-url     balance-of    --batch-number
+                        --out                          --address
+                        --guest-dist
+```
+
+So `prove balance-of --out /tmp/x.bin ...` will fail with
+`unexpected argument '--out' found`. Put `--out` and `--l2-rpc-url`
+before the statement name, not after.
+
+### Subcommands
+
+The three prove subcommands are `balance-of`,
+`observable-bytecode-hash`, and `tx-inclusion`. There is also an
+`inspect` subcommand that dumps a bundle file without touching any
+RPC. See `--help` on any of them for the full argument list, and
+the local-setup README for worked examples of all three statements.
 
 ## Using the library
 
