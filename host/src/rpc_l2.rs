@@ -53,6 +53,7 @@ use prividium_sd_core::statements::balance_of::BalanceOfWitness;
 use prividium_sd_core::statements::observable_bytecode_hash::ObservableBytecodeHashWitness;
 use prividium_sd_core::statements::tx_inclusion::TxInclusionWitness;
 use prividium_sd_core::stored_batch_info::{L1VerificationData, StoredBatchInfo};
+use prividium_sd_core::tree::key::account_properties_slot_key;
 use prividium_sd_core::tree::merkle::{
     AccountMerkleProof, FlatStorageLeaf, LeafProof, TREE_DEPTH,
 };
@@ -184,7 +185,8 @@ impl RpcWitnessSource {
             ));
         }
         let slot_proof = &proof.storage_proofs[0];
-        let account_proof = translate_proof(&slot_proof.proof)?;
+        let flat_key = account_properties_slot_key(&address_to_bytes(address));
+        let account_proof = translate_proof(&slot_proof.proof, flat_key)?;
 
         // 2. Preimage (124 bytes) — only used for Existing proofs;
         //    for NonExisting we stuff TRIVIAL_VALUE and claim
@@ -250,7 +252,8 @@ impl RpcWitnessSource {
                 proof.storage_proofs.len(),
             ));
         }
-        let account_proof = translate_proof(&proof.storage_proofs[0].proof)?;
+        let flat_key = account_properties_slot_key(&address_to_bytes(address));
+        let account_proof = translate_proof(&proof.storage_proofs[0].proof, flat_key)?;
 
         let (obh, preimage) = match &account_proof {
             AccountMerkleProof::Existing(_) => {
@@ -311,47 +314,69 @@ impl RpcWitnessSource {
         let anchor = self
             .get_proof(address_properties_addr(), batch_number)
             .await?;
+        // Flat key for the anchor proof. We asked for a slot under
+        // `ACCOUNT_PROPERTIES_STORAGE_ADDRESS` keyed by the all-zero
+        // user address — which is essentially never touched, so the
+        // server returns a `NonExisting` bracketing proof. Either
+        // way, the root it recomputes IS the tree root for the batch.
+        let anchor_flat_key = account_properties_slot_key(&[0u8; 20]);
         let state_cm = wire_state_commitment_to_core(
             &anchor.state_commitment_preimage,
-            // state_root is recovered from the proof; we use the
-            // first proof's implied root.
             anchor
                 .storage_proofs
                 .first()
-                .map(|sp| implied_root(&sp.proof))
+                .map(|sp| implied_root(&sp.proof, anchor_flat_key))
                 .unwrap_or([0u8; 32]),
         );
         let l1_data = wire_l1_to_core(&anchor.l1_verification_data);
 
         // 2. Fetch the 256-block window ending at `state_cm.block_number`.
+        //
+        // Window layout mirrors the server's
+        // `block_hashes_for_first_block` + subsequent sliding-window
+        // updates:
+        //
+        //     window[255]       = block `tip`
+        //     window[255 - k]   = block `tip - k`, for k in 0..=min(tip, 255)
+        //     window[0 .. 255 - tip] = padding (all zeros) when the
+        //         chain has fewer than 256 blocks yet
+        //
+        // The guest's verifier hashes the whole 256-entry window with
+        // blake2s and compares against the state commitment preimage,
+        // so the padding must be literal zeros — **not** duplicates
+        // of the genesis block hash.
         let tip = state_cm.block_number;
-        let mut blocks: Vec<AnyRpcBlock> = Vec::with_capacity(256);
-        for offset in 0..256u64 {
-            let n = tip.saturating_sub(255 - offset);
-            let block = self
-                .provider
-                .get_block_by_number(BlockNumberOrTag::Number(n))
-                .full()
-                .await?
-                .ok_or(RpcWitnessSourceError::MissingBlock(n))?;
-            blocks.push(block);
-        }
+        let valid_entries = ((tip + 1).min(256)) as usize;
+        let first_valid_idx = 256 - valid_entries;
 
-        // 3. Compute each block's hash using OUR implementation (the
-        //    same RLP path as the guest uses) so we pin the window
-        //    without re-fetching hashes from the RPC. A mismatch with
-        //    the RPC's reported hash would mean the server is lying
-        //    about the block contents, which the guest will catch via
-        //    the window blake check.
         let mut window_hashes = [[0u8; 32]; 256];
         let mut selected: Option<(usize, CoreBlockHeader, Vec<[u8; 32]>, usize)> = None;
-        for (i, b) in blocks.iter().enumerate() {
-            let (core_header, tx_hashes) = block_to_core_header(b)?;
-            let h = core_header.hash();
-            window_hashes[i] = h;
+
+        for (i, slot) in window_hashes
+            .iter_mut()
+            .enumerate()
+            .skip(first_valid_idx)
+        {
+            // For i in [first_valid_idx .. 255], block number =
+            // tip - (255 - i). When tip < 255 this still works
+            // because i >= 255 - tip by construction.
+            let block_number = tip - (255 - i as u64);
+            let block = self
+                .provider
+                .get_block_by_number(BlockNumberOrTag::Number(block_number))
+                .full()
+                .await?
+                .ok_or(RpcWitnessSourceError::MissingBlock(block_number))?;
+
+            // Compute each block's hash with our in-tree RLP + Keccak
+            // path (same one the guest uses), not the one the RPC
+            // reported. If the RPC is lying, the guest's window-blake
+            // check will catch it.
+            let (core_header, tx_hashes) = block_to_core_header(&block)?;
+            *slot = core_header.hash();
 
             if selected.is_none() {
-                if let Some(idx) = tx_hashes.iter().position(|tx| tx == tx_hash.as_slice()) {
+                if let Some(idx) = tx_hashes.iter().position(|t| t == tx_hash.as_slice()) {
                     selected = Some((i, core_header, tx_hashes, idx));
                 }
             }
@@ -363,7 +388,7 @@ impl RpcWitnessSource {
                 tx_hash,
             })?;
 
-        // 4. Build the final witness + compute the L1 commitment.
+        // 3. Build the final witness + compute the L1 commitment.
         let stored_batch = StoredBatchInfo {
             batch_number,
             batch_hash: state_cm.compute(),
@@ -371,7 +396,9 @@ impl RpcWitnessSource {
         };
         let l1_commitment = stored_batch.compute_l1_commitment();
 
-        let derived_block_number = state_cm.block_number - 255 + window_index as u64;
+        // Same `tip - (255 - idx)` form the guest uses; avoids
+        // underflow for early chain.
+        let derived_block_number = tip - (255 - window_index as u64);
         let params = TxInclusionParams {
             block_number: derived_block_number,
             tx_hash: tx_hash.0,
@@ -455,37 +482,22 @@ fn address_to_bytes(address: Address) -> [u8; 20] {
 
 /// Translate a wire [`InnerStorageSlotProof`] into our core
 /// [`AccountMerkleProof`], padding Merkle paths to the full 64-entry
-/// uncompressed form that our guest verifier expects.
+/// uncompressed form that the guest's verifier expects.
+///
+/// `flat_key` must be the flat storage key the proof is *for* — i.e.
+/// `blake2s(address_padded_32_be || storage_key_32)`. For the
+/// `Existing` variant the server does not return the leaf key on the
+/// wire (the outer `StorageSlotProof.key` carries the address-scoped
+/// key, not the flat-derived one), so the caller must compute and
+/// supply it. For the `NonExisting` variant each neighbour carries
+/// its own `leafKey` field on the wire, and `flat_key` is ignored.
 fn translate_proof(
     wire: &InnerStorageSlotProof,
+    flat_key: [u8; 32],
 ) -> Result<AccountMerkleProof, RpcWitnessSourceError> {
     match wire {
         InnerStorageSlotProof::Existing(entry) => {
-            // For existing proofs, the wire entry's `key` isn't
-            // carried on the inner entry — it's on the outer
-            // `StorageSlotProof.key`. Our core `LeafProof` carries
-            // the leaf's flat key directly (not the address-scoped
-            // key), so we need to re-derive it. For now the guest
-            // verifier reads `leaf.key` but compares against the
-            // expected flat key supplied by the statement-specific
-            // caller, so we can populate it with the inner proof's
-            // flat-equivalent reconstruction later.
-            //
-            // The simplest correct approach: the caller of
-            // `verify_account_proof` supplies the expected flat
-            // key, and `leaf.key` must match. We set it to zero
-            // and let the verifier's key check catch any mismatch.
-            //
-            // NOTE: This is wrong — the guest's
-            // `recompute_root()` walks the leaf hash as
-            // `blake2s(leaf.key || leaf.value || leaf.next_u64_le)`,
-            // so `leaf.key` MUST be the real flat key or the
-            // recomputed root will not match. The caller (balance_of,
-            // observable_bytecode_hash) knows the flat key, so
-            // we can't fill it here. Instead, we leave the field
-            // empty and let the caller set it. See
-            // `set_leaf_flat_key` on `LeafProof`.
-            let proof = existing_entry_to_leaf_proof(entry, [0u8; 32])?;
+            let proof = existing_entry_to_leaf_proof(entry, flat_key)?;
             Ok(AccountMerkleProof::Existing(proof))
         }
         InnerStorageSlotProof::NonExisting {
@@ -547,20 +559,28 @@ fn existing_entry_to_leaf_proof(
     })
 }
 
-/// Recover the tree root implied by an `InnerStorageSlotProof`. Used
-/// for the tx_inclusion anchor where we don't have a specific flat
-/// key to check against.
-fn implied_root(inner: &InnerStorageSlotProof) -> [u8; 32] {
+/// Recover the tree root implied by an `InnerStorageSlotProof`,
+/// given the flat key that the outer proof is for.
+///
+/// `flat_key` is only relevant for the `Existing` variant — the
+/// `NonExisting` case reads the real leaf keys off the neighbours.
+/// This helper is used by the tx_inclusion anchor path, where we
+/// deliberately request a proof for a key we know is absent so we
+/// always hit the `NonExisting` branch and get the tree root
+/// via the bracketing neighbours.
+fn implied_root(inner: &InnerStorageSlotProof, flat_key: [u8; 32]) -> [u8; 32] {
     match inner {
         InnerStorageSlotProof::Existing(entry) => {
-            if let Ok(lp) = existing_entry_to_leaf_proof(entry, [0u8; 32]) {
+            if let Ok(lp) = existing_entry_to_leaf_proof(entry, flat_key) {
                 lp.recompute_root()
             } else {
                 [0u8; 32]
             }
         }
         InnerStorageSlotProof::NonExisting { left_neighbor, .. } => {
-            if let Ok(lp) = existing_entry_to_leaf_proof(&left_neighbor.inner, left_neighbor.leaf_key.0) {
+            if let Ok(lp) =
+                existing_entry_to_leaf_proof(&left_neighbor.inner, left_neighbor.leaf_key.0)
+            {
                 lp.recompute_root()
             } else {
                 [0u8; 32]
@@ -634,9 +654,24 @@ fn block_to_core_header(
         .map(|m| m.0)
         .unwrap_or_default();
 
-    // `logs_bloom` is a `Bloom` newtype around `FixedBytes<256>`;
-    // dereference twice to land on the raw array.
-    let logs_bloom_bytes: [u8; 256] = *header_inner.logs_bloom.0;
+    // `logs_bloom` must be zeroed out when computing the block
+    // hash. The ZKsync OS sequencer stores the actual (non-zero)
+    // bloom filter in the block repository, but the bootloader's
+    // `BlockHeader::hash()` — and therefore the hash that ends up in
+    // `last_256_block_hashes_blake` and ultimately the L1 state
+    // commitment — is computed over a zeroed bloom. See the comment
+    // in the server's `zks_impl.rs` (get_proof_impl):
+    //
+    //     // `logs_bloom` must be zeroed out when computing block
+    //     // hashes due to how block hashes are defined elsewhere
+    //     // in the codebase.
+    //
+    // `eth_getBlockByNumber` returns the REAL bloom, so we discard
+    // it here and substitute the canonical zero value that the
+    // server's hash path uses. Pulled out as a separate binding (not
+    // read from `header_inner.logs_bloom`) to make this intentional.
+    let _actual_bloom_ignored = header_inner.logs_bloom;
+    let logs_bloom_bytes: [u8; 256] = [0u8; 256];
 
     // Extract the ordered list of tx hashes from the block body. We
     // request `full = true` so we always see `Transactions::Full`;

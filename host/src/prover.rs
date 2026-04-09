@@ -55,6 +55,14 @@ pub enum ProveError {
     /// `exit_error()` on an invalid witness.
     #[error("guest rejected the witness (runner panicked)")]
     GuestRejected,
+    /// The witness failed the native `prividium-sd-core` verifier
+    /// before we even reached the airbender prover. This gives a
+    /// specific error variant (instead of the opaque `GuestRejected`
+    /// you get when the guest traps via `exit_error()`) and is
+    /// particularly useful for debugging fresh witness-source
+    /// implementations.
+    #[error("native pre-verification rejected the witness: {0:?}")]
+    NativePreCheck(prividium_sd_core::statements::StatementError),
 }
 
 /// Generate a [`ProofBundle`] by running the airbender dev prover on
@@ -78,6 +86,32 @@ pub fn prove_with_program(
     program: &Program,
     request: ProveRequest,
 ) -> Result<ProofBundle, ProveError> {
+    // Run the native core verifier over the witness bytes FIRST.
+    // If this fails, return a specific `StatementError` rather than
+    // letting the airbender runner panic with `Illegal instruction`
+    // (which is what the guest's `exit_error()` call surfaces as).
+    //
+    // On success, this is essentially free: the witness bytes are
+    // the same Vec we push to the prover below, and the native
+    // verifier only runs a few hundred hash operations.
+    let native_pub_input =
+        prividium_sd_core::statements::verify(request.statement_id, &request.witness_bytes)
+            .map_err(ProveError::NativePreCheck)?;
+    // Sanity: the witness's public-input commitment must match the
+    // claimed L1 commitment + params_bytes. If it doesn't, the
+    // witness source is producing inconsistent data.
+    let expected_pub_input = prividium_sd_core::pub_input::compute_raw(
+        request.statement_id,
+        request.batch_number,
+        &request.l1_commitment,
+        &request.params_bytes,
+    );
+    if native_pub_input != expected_pub_input {
+        return Err(ProveError::NativePreCheck(
+            prividium_sd_core::statements::StatementError::PublicParamMismatch,
+        ));
+    }
+
     let mut inputs = Inputs::new();
     inputs.push(&(request.statement_id as u32))?;
     inputs.push(&request.witness_bytes)?;

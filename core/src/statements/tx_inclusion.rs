@@ -221,18 +221,25 @@ pub fn verify(bytes: &[u8]) -> Result<[u8; 32], StatementError> {
     // 3. Derive the block number from the batch tip + window index and
     //    match against the public parameter.
     //
-    //    Window layout is oldest-first (see
-    //    `post_tx_op_proving_singleblock_batch.rs:137-145`). Index 0
-    //    maps to block `tip - 255`, index 255 maps to `tip`.
+    //    Window layout (from the bootloader's
+    //    `post_tx_op_proving_singleblock_batch.rs` + `BlockHashes`
+    //    ring buffer in `node/bin/src/lib.rs:block_hashes_for_first_block`):
     //
-    //    For chains with fewer than 256 total blocks the window is
-    //    zero-padded at the start; we do not support proofs that point
-    //    at those zero entries (the block header would not hash to
-    //    them anyway, so the step below would catch it).
+    //    - `window[255]` is the block at height `tip`
+    //    - `window[255 - k]` is the block at height `tip - k`, for `k in 0..=min(tip, 255)`
+    //    - `window[0 .. 255 - tip]` are zero-padded entries for blocks
+    //      that do not exist yet (chain younger than 256 blocks). Any
+    //      proof that points into one of those padded slots will be
+    //      rejected at step 4 below because `block_header.hash()` will
+    //      not match the zero entry.
+    //
+    //    Computing `derived_block_number` via `tip - (255 - idx)`
+    //    rather than the old `(tip - 255) + idx` form avoids
+    //    underflow for `tip < 255`.
     let tip = w.state_commitment.block_number;
+    let k = 255u64 - idx as u64; // `idx < 256` guaranteed by the bounds check above
     let derived_block_number = tip
-        .checked_sub(255)
-        .and_then(|oldest| oldest.checked_add(idx as u64))
+        .checked_sub(k)
         .ok_or(StatementError::BlockNumberMismatch)?;
     if derived_block_number != w.params.block_number {
         return Err(StatementError::BlockNumberMismatch);

@@ -240,9 +240,17 @@ fn verifier_rejects_tampered_params() {
     );
 }
 
-/// A guest that's asked to prove a witness with a tampered balance
-/// must call `exit_error()`, which the prover wraps as
-/// `ProveError::GuestRejected`.
+/// A guest asked to prove a witness with a tampered balance must
+/// reject it. The rejection can come from two places:
+///
+/// - `ProveError::NativePreCheck(...)` when the `prove()` helper's
+///   native pre-verification catches the problem first (the fast
+///   path — this is what actually runs in practice).
+/// - `ProveError::GuestRejected` if someone bypasses the pre-check
+///   (e.g. via `prove_with_program` on a non-instrumented prover).
+///
+/// Either is acceptable here — the point of the test is that the
+/// tampered witness never produces a valid proof bundle.
 #[test]
 fn prover_rejects_tampered_witness_balance() {
     let addr = [0xabu8; 20];
@@ -255,7 +263,11 @@ fn prover_rejects_tampered_witness_balance() {
 
     let err = prove(guest_dist(), request).unwrap_err();
     assert!(
-        matches!(err, prividium_sd_host::ProveError::GuestRejected),
-        "expected GuestRejected, got {err:?}"
+        matches!(
+            err,
+            prividium_sd_host::ProveError::GuestRejected
+                | prividium_sd_host::ProveError::NativePreCheck(_)
+        ),
+        "expected GuestRejected or NativePreCheck, got {err:?}"
     );
 }

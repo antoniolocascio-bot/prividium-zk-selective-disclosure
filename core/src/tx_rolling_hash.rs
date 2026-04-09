@@ -1,27 +1,44 @@
-//! Rolling Keccak-256 accumulator for transaction hashes.
-//!
-//! Mirrors `basic_bootloader::bootloader::block_flow::zk::block_data::
-//! TransactionsRollingKeccakHasher` (`block_data.rs`). The bootloader
-//! uses this accumulator to produce the `transactions_root` field of a
-//! block header:
+//! Rolling Keccak-256 accumulator for transaction hashes — matches
+//! the bootloader's `tx_rolling_hash` local variable in
+//! `basic_bootloader::bootloader::run_prepared` (`bootloader/mod.rs`),
+//! which is what ends up in a block header's `transactions_root`
+//! field.
 //!
 //! ```text
-//! state₀       = keccak256("")              // = 0xc5d2…a470
+//! state₀       = [0u8; 32]                 // zero-initialized!
 //! state_{i+1}  = keccak256(state_i || tx_hash_i)
 //! ```
 //!
-//! The guest replays this rolling hash as part of the `tx_inclusion`
-//! statement (see `DESIGN.md` §6.3), so the seed and the update step
-//! must match the bootloader's exactly.
+//! # Warning — two similar-but-distinct accumulators exist
+//!
+//! ZKsync OS has a separate type named
+//! `TransactionsRollingKeccakHasher` in
+//! `basic_bootloader/src/bootloader/block_flow/zk/block_data.rs`. That
+//! one initializes its state to `keccak256("")` (i.e. `0xc5d2…a470`)
+//! and is used to accumulate **priority-operation hashes** for the ZK
+//! batch public input, NOT the block header's `transactions_root`.
+//! The two are entirely separate accumulators with different initial
+//! states — confusing them gives the wrong root for tx-inclusion
+//! proofs.
+//!
+//! The one we want for tx-inclusion is the **zero-initialized** one,
+//! because `tx_inclusion` binds to `block_header.transactions_root`.
+//! See `bootloader/mod.rs:213` in the upstream bootloader for the
+//! initial-state definition:
+//!
+//! ```rust,ignore
+//! let mut tx_rolling_hash = [0u8; 32];
+//! // ...
+//! keccak.update(tx_rolling_hash);
+//! keccak.update(tx_processing_result.tx_hash.as_u8_ref());
+//! tx_rolling_hash = keccak.finalize();
+//! ```
 
 use crate::hash::Keccak256Hasher;
 
-/// The initial state of the rolling hash — i.e. `keccak256("")`.
-/// Locked in by `hash::tests::keccak256_matches_empty_vector`.
-pub const EMPTY_KECCAK: [u8; 32] = [
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
-];
+/// The initial state of the `transactions_root` rolling hash — all
+/// zeros, matching `bootloader/mod.rs:213`.
+pub const INITIAL_STATE: [u8; 32] = [0u8; 32];
 
 /// Rolling Keccak-256 accumulator for in-block transaction hashes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,10 +54,11 @@ impl Default for TxRollingHasher {
 }
 
 impl TxRollingHasher {
-    /// Fresh hasher, initial state `keccak256("")`.
+    /// Fresh hasher, initial state `[0u8; 32]`. Matches the
+    /// bootloader's `tx_rolling_hash = [0u8; 32]` initialization.
     pub fn empty() -> Self {
         Self {
-            state: EMPTY_KECCAK,
+            state: INITIAL_STATE,
             count: 0,
         }
     }
@@ -83,9 +101,9 @@ mod tests {
     use crate::hash::keccak256;
 
     #[test]
-    fn empty_hasher_matches_empty_keccak() {
-        assert_eq!(TxRollingHasher::empty().current(), EMPTY_KECCAK);
-        assert_eq!(EMPTY_KECCAK, keccak256(&[]));
+    fn empty_hasher_starts_at_zero() {
+        assert_eq!(TxRollingHasher::empty().current(), [0u8; 32]);
+        assert_eq!(INITIAL_STATE, [0u8; 32]);
     }
 
     #[test]
@@ -95,9 +113,8 @@ mod tests {
         r.push(&tx);
         assert_eq!(r.count(), 1);
 
-        // Manually: keccak256(EMPTY_KECCAK || tx)
+        // Manually: keccak256([0u8; 32] || tx)
         let mut buf = [0u8; 64];
-        buf[..32].copy_from_slice(&EMPTY_KECCAK);
         buf[32..].copy_from_slice(&tx);
         assert_eq!(r.current(), keccak256(&buf));
     }
