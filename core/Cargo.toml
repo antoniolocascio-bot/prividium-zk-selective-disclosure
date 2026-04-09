@@ -1,0 +1,16 @@
+[package]
+name = "prividium-sd-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared no_std logic for Prividium selective-disclosure proofs (used by the airbender guest and native test fixtures)."
+
+[dependencies]
+blake2 = { version = "0.10", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+
+[features]
+default = []
+# Enables std-side conveniences used by native tests (pretty errors, etc.).
+# The guest never enables this.
+std = []

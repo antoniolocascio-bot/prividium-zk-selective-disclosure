@@ -1,0 +1,14 @@
+# Build artifacts
+target/
+dist/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Cargo.lock IS committed — this is an application workspace, not a
+# library crate published to crates.io, and we need deterministic
+# builds across contributors.

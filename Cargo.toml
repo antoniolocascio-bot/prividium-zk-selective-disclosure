@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["core", "test-fixtures"]
+# guest/ and host/ are excluded because they have their own toolchain
+# flags, profile overrides, and target triples (guest is riscv32).
+exclude = ["guest", "host"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"

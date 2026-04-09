@@ -1,0 +1,35 @@
+[package]
+name = "prividium-sd-host"
+version = "0.1.0"
+edition = "2021"
+description = "Prover + verifier hosts for Prividium selective-disclosure proofs."
+
+[lib]
+name = "prividium_sd_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "prividium-sd-host"
+path = "src/main.rs"
+
+[dependencies]
+airbender-host = { path = "../../airbender-platform/crates/airbender-host", default-features = false }
+prividium-sd-core = { path = "../core" }
+
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+thiserror = "2"
+
+[dev-dependencies]
+prividium-sd-test-fixtures = { path = "../test-fixtures" }
+
+# Mirror airbender-platform's guidance on reducing debug info for packages that
+# otherwise require a larger-than-default compilation stack.
+[profile.dev.package.keccak_special5]
+debug = 0
+[profile.dev.package.setups]
+debug = 0
+[profile.release.package.keccak_special5]
+debug = 0
+[profile.release.package.setups]
+debug = 0

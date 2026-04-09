@@ -1,0 +1,8 @@
+[package]
+name = "prividium-sd-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+airbender = { package = "airbender-sdk", path = "../../airbender-platform/crates/airbender-sdk" }
+prividium-sd-core = { path = "../core" }
